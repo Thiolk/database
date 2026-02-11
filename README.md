@@ -2,6 +2,9 @@
 
 PostgreSQL database for the e-commerce microservices project. This repository provides a standalone database setup with initialization scripts (schema + seed) so other services can connect via environment variables.
 
+## Release
+- Current release: 1.0.0
+
 ## What’s in this repo
 - PostgreSQL container configuration (Docker Compose)
 - Database initialization scripts (schema/seed)
