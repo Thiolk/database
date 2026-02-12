@@ -3,7 +3,7 @@
 PostgreSQL database for the e-commerce microservices project. This repository provides a standalone database setup with initialization scripts (schema + seed) so other services can connect via environment variables.
 
 ## Release
-- Current release: 1.0.1
+- Current release: 1.1.0
 
 ## What’s in this repo
 - PostgreSQL container configuration (Docker Compose)
@@ -67,8 +67,8 @@ We use **Docker Scout** to continuously assess the image for known CVEs and to m
 ### Run a scan
 From the repo root:
 ```bash
-docker scout quickview postgres:16-alpine
-docker scout cves postgres:16-alpine
+chmod +x scripts/security-docker-scout-scan.sh
+./scripts/security-docker-scout-scan.sh
 ```
 
 ### Policy / Rationale
