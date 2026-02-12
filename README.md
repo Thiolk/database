@@ -57,3 +57,20 @@ Environment variables are defined in deploy/docker/.env:
 
 Host (from your laptop): localhost
 Port: value of POSTGRES_PORT (default 5432)
+
+## Security Scanning (Docker Scout)
+
+This repository uses the official PostgreSQL image (`postgres:16-alpine`). Since we do not maintain the upstream image, vulnerabilities may be reported by scanners even when using an official tag.
+
+We use **Docker Scout** to continuously assess the image for known CVEs and to make informed decisions about image versions.
+
+### Run a scan
+From the repo root:
+```bash
+docker scout quickview postgres:16-alpine
+docker scout cves postgres:16-alpine
+```
+
+### Policy / Rationale
+We prefer official images for stability and supply-chain provenance.
+We scan multiple compatible tags and select the lowest-risk option available at the time of implementation.
