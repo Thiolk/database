@@ -1,1 +1,0 @@
-# Dockerfile is empty as the official postgresSQL image is being used
