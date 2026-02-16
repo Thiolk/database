@@ -48,10 +48,11 @@ pipeline {
       }
     }
 
-    stage('Smoke Test (Schema + Seed)') {
+    stage('Database Setup') {
       steps {
         sh '''
           set -eux
+          cp deploy/docker/.env.example deploy/docker/.env
           
           # Reset DB
           echo "Reset DB (fresh init.sql run)"
@@ -59,8 +60,16 @@ pipeline {
 
           # Bring DB up
           docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d db
+        '''
+      }
+    }
 
+    stage('Smoke Test (Schema + Seed)') {
+      steps {
+        sh '''
+          set -eux
           # Run your existing smoke script (keep it as source-of-truth)
+
           chmod +x tests/db-smoke.sh
           ./tests/db-smoke.sh
         '''
