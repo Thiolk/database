@@ -1,26 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Paths (run from repo root)
-COMPOSE_FILE="deploy/docker/docker-compose.yml"
-ENV_FILE="deploy/docker/.env"
-
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-  echo "ERROR: Missing $COMPOSE_FILE"
-  exit 1
-fi
-
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "ERROR: Missing $ENV_FILE (copy from deploy/docker/.env.example)"
-  exit 1
-fi
-
-echo "Reset DB (fresh init.sql run)"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v || true
-
-echo "Start DB"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
-
 # Pull creds from .env (simple parser for KEY=VALUE lines)
 get_env() {
   local key="$1"

@@ -1,9 +1,17 @@
 pipeline {
   agent any
 
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
   environment {
     COMPOSE_FILE = "deploy/docker/docker-compose.yml"
+    PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    DOCKERHUB_USER   = "thiolengkiat413"
     ENV_FILE     = "deploy/docker/.env"
+    UPSTREAM_IMAGE = "postgres:16-alpine"
   }
 
   stages {
@@ -11,28 +19,49 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Code Compilation and Linter Checks') {
+    stage('Determine Pipeline Mode') {
       steps {
-        echo "Database service only has schema sql files and no code compilation and meaningful linters can be ran."
-        echo "Skipping to Build and Validate Stage"
+        script {
+          // Jenkins multibranch common envs:
+          // - CHANGE_ID exists for PRs
+          // - BRANCH_NAME is the branch
+          // - TAG_NAME exists when building a tag (in many setups)
+          env.IMAGE_TAG   = ""
+          env.TARGET_ENV  = "build"
+
+          def branch  = env.BRANCH_NAME ?: ""
+          def tagName = env.TAG_NAME?.trim()
+          env.RELEASE_TAG = tagName ?: ""
+
+          if (tagName) {
+            env.TARGET_ENV = "prod"        // manual trigger via pushing a git tag
+          } else if (branch == "develop") {
+            env.TARGET_ENV = "dev"
+          } else if (branch.startsWith("release/")) {
+            env.TARGET_ENV = "staging"
+          }
+
+          echo "BRANCH_NAME: ${branch}"
+          echo "TAG_NAME: ${tagName ?: 'none'}"
+          echo "TARGET_ENV: ${env.TARGET_ENV}"
+        }
       }
     }
 
-    stage('Build / Validate') {
+    stage('Smoke Test (Schema + Seed)') {
       steps {
         sh '''
           set -eux
-          test -f "${COMPOSE_FILE}"
-          test -f "schema/init.sql"
-          test -f "tests/db-smoke.sh"
-        '''
-      }
-    }
+          
+          # Reset DB
+          echo "Reset DB (fresh init.sql run)"
+          docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v || true
 
-    stage('Test (Schema + Integration)') {
-      steps {
-        sh '''
-          set -eux
+          # Bring DB up
+          docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d db
+
+          # Run your existing smoke script (keep it as source-of-truth)
+          chmod +x tests/db-smoke.sh
           ./tests/db-smoke.sh
         '''
       }
@@ -43,15 +72,39 @@ pipeline {
       steps {
         sh '''
           set -eux
-          ./scripts/security-docker-scout-scan.sh
+          chmod +x scripts/security-docker-scout-scan.sh
+          IMAGE="${UPSTREAM_IMAGE}" ./scripts/security-docker-scout-scan.sh
         '''
       }
     }
 
-    stage('Container Build / Push / Deploy') {
+    stage('Resolve Image Tags') {
       steps {
-        echo "Database uses official postgres image; no build/push/deploy in this repo."
+        script {
+          def tag = env.TAG_NAME ?: ""
+          if (env.PIPELINE_MODE == "prod" && tag) {
+            env.IMAGE_TAG = tag
+          } else {
+            env.IMAGE_TAG = "build-${env.BUILD_NUMBER}"
+          }
+          echo "Resolved IMAGE_TAG=${env.IMAGE_TAG}"
+        }
       }
+    }
+
+    stage('Deploy (dev)') {
+      when { expression { return env.PIPELINE_MODE == "dev" } }
+      steps { echo "Deploy placeholder (dev) — will be implemented in Kubernetes phase." }
+    }
+
+    stage('Deploy (staging)') {
+      when { expression { return env.PIPELINE_MODE == "staging" } }
+      steps { echo "Deploy placeholder (staging) — will be implemented in Kubernetes phase." }
+    }
+
+    stage('Deploy (prod)') {
+      when { expression { return env.PIPELINE_MODE == "prod" } }
+      steps { echo "Deploy placeholder (prod) — will be implemented in Kubernetes phase." }
     }
   }
 

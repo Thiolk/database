@@ -12,11 +12,9 @@ echo "Image:      ${IMAGE}"
 echo "Severities: ${SEVERITIES}"
 echo
 
-# Optional: quick summary (never fail CI)
 docker scout quickview "${IMAGE}" || true
 echo
 
-# CVE scan (no --exit-code)
 docker scout cves "${IMAGE}" --only-severity "${SEVERITIES}" || true
 echo
 echo "NOTE: CVEs (if any) are reported for visibility but do not fail the pipeline."
