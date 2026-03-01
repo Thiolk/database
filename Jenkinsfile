@@ -8,10 +8,17 @@ pipeline {
 
   environment {
     COMPOSE_FILE = "deploy/docker/docker-compose.yml"
-    PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    DOCKERHUB_USER   = "thiolengkiat413"
+    PATH         = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+    ENV_EXAMPLE  = "deploy/docker/.env.example"
     ENV_FILE     = "deploy/docker/.env"
+
+    // Upstream image only (no custom build)
     UPSTREAM_IMAGE = "postgres:16-alpine"
+
+    // Still keep namespace/name for consistency in logs
+    DOCKERHUB_USER = "thiolengkiat413"
+    IMAGE_NAME     = "database"
   }
 
   stages {
@@ -22,23 +29,21 @@ pipeline {
     stage('Determine Pipeline Mode') {
       steps {
         script {
-          // Jenkins multibranch common envs:
-          // - CHANGE_ID exists for PRs
-          // - BRANCH_NAME is the branch
-          // - TAG_NAME exists when building a tag (in many setups)
-          env.IMAGE_TAG   = ""
           env.TARGET_ENV  = "build"
-
-          def branch  = env.BRANCH_NAME ?: ""
-          def tagName = env.TAG_NAME?.trim()
-          env.RELEASE_TAG = tagName ?: ""
+          env.RELEASE_TAG = (env.TAG_NAME?.trim()) ?: ""
+          def branch      = env.BRANCH_NAME ?: ""
+          def tagName     = env.RELEASE_TAG
 
           if (tagName) {
-            env.TARGET_ENV = "prod"        // manual trigger via pushing a git tag
+            env.TARGET_ENV = "prod"
+          } else if (branch == "main") {
+            env.TARGET_ENV = "staging"
           } else if (branch == "develop") {
             env.TARGET_ENV = "dev"
           } else if (branch.startsWith("release/")) {
-            env.TARGET_ENV = "staging"
+            env.TARGET_ENV = "rc"
+          } else {
+            env.TARGET_ENV = "build"
           }
 
           echo "BRANCH_NAME: ${branch}"
@@ -48,18 +53,47 @@ pipeline {
       }
     }
 
+    stage('Prepare .env') {
+      steps {
+        sh '''
+          set -eux
+          test -f "${ENV_EXAMPLE}"
+          [ -f "${ENV_FILE}" ] || cp "${ENV_EXAMPLE}" "${ENV_FILE}"
+        '''
+      }
+    }
+
+    stage('Resolve Release Marker') {
+      steps {
+        script {
+          // For DB we’re not tagging/pushing an image, but we keep a consistent “release marker”
+          if (env.TARGET_ENV == "prod") {
+            if (!env.RELEASE_TAG?.trim()) {
+              error("Prod pipeline requires a Git tag.")
+            }
+            env.RELEASE_MARKER = env.RELEASE_TAG
+          } else {
+            env.RELEASE_MARKER = "${env.TARGET_ENV}-${env.BUILD_NUMBER}"
+          }
+
+          echo "Resolved release marker:"
+          echo "  TARGET_ENV      = ${env.TARGET_ENV}"
+          echo "  RELEASE_MARKER  = ${env.RELEASE_MARKER}"
+          echo "  UPSTREAM_IMAGE  = ${env.UPSTREAM_IMAGE}"
+        }
+      }
+    }
+
     stage('Database Setup') {
       steps {
         sh '''
           set -eux
-          cp deploy/docker/.env.example deploy/docker/.env
-          
-          # Reset DB
+
           echo "Reset DB (fresh init.sql run)"
           docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v || true
 
-          # Bring DB up
-          docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d db
+          echo "Bring DB up (upstream image only)"
+          docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d db
         '''
       }
     }
@@ -68,15 +102,13 @@ pipeline {
       steps {
         sh '''
           set -eux
-          # Run your existing smoke script (keep it as source-of-truth)
-
           chmod +x tests/db-smoke.sh
           ./tests/db-smoke.sh
         '''
       }
     }
 
-    stage('Security Scan (Docker Scout - notify only)') {
+    stage('Security Scan (Docker Scout - notify only, mandatory)') {
       when { expression { return fileExists('scripts/security-docker-scout-scan.sh') } }
       steps {
         sh '''
@@ -87,33 +119,62 @@ pipeline {
       }
     }
 
-    stage('Resolve Image Tags') {
+    stage('Prod Eligibility Check (tag must be on HEAD)') {
+      when { expression { return env.TARGET_ENV == "prod" } }
       steps {
-        script {
-          def tag = env.TAG_NAME ?: ""
-          if (env.PIPELINE_MODE == "prod" && tag) {
-            env.IMAGE_TAG = tag
-          } else {
-            env.IMAGE_TAG = "build-${env.BUILD_NUMBER}"
-          }
-          echo "Resolved IMAGE_TAG=${env.IMAGE_TAG}"
-        }
+        sh '''
+          set -eux
+
+          echo "HEAD:"
+          git show -s --oneline --decorate HEAD
+
+          echo "Tags pointing at HEAD:"
+          git tag --points-at HEAD
+
+          if git tag --points-at HEAD | grep -qx "${TAG_NAME}"; then
+            echo "OK: HEAD is correctly tagged with ${TAG_NAME}"
+          else
+            echo "BLOCK: HEAD is not tagged with ${TAG_NAME}"
+            exit 1
+          fi
+        '''
       }
     }
 
-    stage('Deploy (dev)') {
-      when { expression { return env.PIPELINE_MODE == "dev" } }
-      steps { echo "Deploy placeholder (dev) — will be implemented in Kubernetes phase." }
+    stage('Deploy (Dev)') {
+      when { expression { return env.TARGET_ENV == "dev" } }
+      steps {
+        sh '''
+          set -eux
+          echo "Deploy placeholder (dev) — Kubernetes phase."
+          echo "DB base image: ${UPSTREAM_IMAGE}"
+          echo "Release marker: ${RELEASE_MARKER}"
+        '''
+      }
     }
 
-    stage('Deploy (staging)') {
-      when { expression { return env.PIPELINE_MODE == "staging" } }
-      steps { echo "Deploy placeholder (staging) — will be implemented in Kubernetes phase." }
+    stage('Deploy (Staging)') {
+      when { expression { return env.TARGET_ENV == "staging" } }
+      steps {
+        sh '''
+          set -eux
+          echo "Deploy placeholder (staging) — Kubernetes phase."
+          echo "DB base image: ${UPSTREAM_IMAGE}"
+          echo "Release marker: ${RELEASE_MARKER}"
+        '''
+      }
     }
 
-    stage('Deploy (prod)') {
-      when { expression { return env.PIPELINE_MODE == "prod" } }
-      steps { echo "Deploy placeholder (prod) — will be implemented in Kubernetes phase." }
+    stage('Deploy (Prod)') {
+      when { expression { return env.TARGET_ENV == "prod" } }
+      steps {
+        sh '''
+          set -eux
+          echo "Deploy placeholder (prod) — Kubernetes phase."
+          echo "DB base image: ${UPSTREAM_IMAGE}"
+          echo "Release tag: ${RELEASE_TAG}"
+        '''
+      }
     }
   }
 
@@ -121,7 +182,8 @@ pipeline {
     always {
       sh '''
         set +e
-        docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" down -v
+        docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" down -v || true
+        rm -f "${ENV_FILE}" || true
       '''
     }
   }
