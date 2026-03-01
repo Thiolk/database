@@ -25,7 +25,7 @@ deployments).
 
 ## Release
 
--   Current release: 1.1.0
+-   Current release: 2.0.0
 
 ------------------------------------------------------------------------
 
