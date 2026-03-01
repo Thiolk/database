@@ -1,20 +1,47 @@
-kubectl -n staging get deploy,po,svc,pvc
-NAME                              READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/order-service     2/2     2            2           6h31m
-deployment.apps/postgres          1/1     1            1           13s
-deployment.apps/product-service   2/2     2            2           58m
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-pvc-write
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+            - secretRef:
+                name: postgres-secret
+          env:
+            - name: MARKER
+              value: "__MARKER__"
+          command:
+            - sh
+            - -c
+            - |
+              set -euo pipefail
+              echo "Waiting for Postgres..."
+              for i in $(seq 1 30); do
+                if pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
 
-NAME                                  READY   STATUS    RESTARTS   AGE
-pod/order-service-6f54f5fdf7-kqkxz    1/1     Running   0          85m
-pod/order-service-6f54f5fdf7-lfnj6    1/1     Running   0          85m
-pod/postgres-878767df8-f65d9          1/1     Running   0          13s
-pod/product-service-d785cb554-5dvdv   1/1     Running   0          12m
-pod/product-service-d785cb554-j6h2t   1/1     Running   0          12m
+              echo "Writing PVC marker: $MARKER"
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 \
+                -c "CREATE TABLE IF NOT EXISTS pvc_test(id serial primary key, note text not null, created_at timestamptz default now());"
 
-NAME                      TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
-service/order-service     NodePort    10.100.92.143   <none>        3002:30699/TCP   6h30m
-service/postgres          ClusterIP   10.103.53.179   <none>        5432/TCP         13s
-service/product-service   NodePort    10.108.64.139   <none>        3001:30604/TCP   58m
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 \
+                -c "INSERT INTO pvc_test(note) VALUES ('$MARKER');"
 
-NAME                                  STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-persistentvolumeclaim/postgres-data   Bound    pvc-5c2df019-0b71-4daa-94f5-ae02640cfd89   2Gi        RWO            standard       <unset>                 13s
+              echo "✅ Write done"
