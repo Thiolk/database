@@ -186,6 +186,24 @@ pipeline {
 
             echo "Cleanup smoke job"
             kubectl -n "$NS" delete job/postgres-smoke --ignore-not-found
+
+            MARKER="jenkins-${JOB_NAME}-${BUILD_NUMBER}"
+
+            # --- 1) Write marker ---
+            sed "s/__MARKER__/${MARKER}/g" k8s/database/base/pvc-write-job.yaml | kubectl -n "$NS" apply -f -
+            kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-write --timeout=240s
+            kubectl -n "$NS" logs job/postgres-pvc-write
+            kubectl -n "$NS" delete job/postgres-pvc-write --ignore-not-found
+
+            # --- 2) Restart postgres (forces detach/reattach of PVC) ---
+            kubectl -n "$NS" rollout restart deployment/postgres
+            kubectl -n "$NS" rollout status deployment/postgres --timeout=180s
+
+            # --- 3) Read marker ---
+            sed "s/__MARKER__/${MARKER}/g" k8s/database/base/pvc-read-job.yaml | kubectl -n "$NS" apply -f -
+            kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-read --timeout=240s
+            kubectl -n "$NS" logs job/postgres-pvc-read
+            kubectl -n "$NS" delete job/postgres-pvc-read --ignore-not-found
           '''
         }
       }
