@@ -193,7 +193,7 @@ pipeline {
             echo "PVC marker: $MARKER"
 
             # --- 1) Write marker ---
-            sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-write-job.yaml | kubectl -n "$NS" apply -f -
+            sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-write-job.yaml | kubectl -n "$NS" apply --validate=false -f -
             kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-write --timeout=240s
             kubectl -n "$NS" logs job/postgres-pvc-write
             kubectl -n "$NS" delete job/postgres-pvc-write --ignore-not-found
@@ -203,7 +203,7 @@ pipeline {
             kubectl -n "$NS" rollout status deployment/postgres --timeout=180s
 
             # --- 3) Read marker ---
-            sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-read-job.yaml  | kubectl -n "$NS" apply -f -
+            sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-read-job.yaml  | kubectl -n "$NS" apply --validate=false -f -
             kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-read --timeout=240s
             kubectl -n "$NS" logs job/postgres-pvc-read
             kubectl -n "$NS" delete job/postgres-pvc-read --ignore-not-found
