@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-smoke
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+            - secretRef:
+                name: postgres-secret
+
+          command:
+            - sh
+            - -c
+            - |
+              set -euo pipefail
+              echo "Waiting for Postgres to be ready..."
+              for i in $(seq 1 30); do
+                if pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
+
+              echo "Running smoke query..."
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres \
+                -U "$POSTGRES_USER" \
+                -d "$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 \
+                -c "SELECT 1;"
+
+              echo "✅ Postgres smoke test passed."
