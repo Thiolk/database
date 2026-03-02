@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-pvc-write
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+            - secretRef:
+                name: postgres-secret
+          env:
+            - name: MARKER
+              value: "__MARKER__"
+          command:
+            - sh
+            - -c
+            - |
+              set -euo pipefail
+              echo "Waiting for Postgres..."
+              for i in $(seq 1 30); do
+                if pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
+
+              echo "Writing PVC marker: $MARKER"
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 \
+                -c "CREATE TABLE IF NOT EXISTS pvc_test(id serial primary key, note text not null, created_at timestamptz default now());"
+
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 \
+                -c "INSERT INTO pvc_test(note) VALUES ('$MARKER');"
+
+              echo "✅ Write done"
