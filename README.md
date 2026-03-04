@@ -41,7 +41,7 @@ pipelines**.
 
 # Release
 
-Current release: 2.1.0
+Current release: 2.2.0
 
 Versioning follows **Semantic Versioning (SemVer)**:
 

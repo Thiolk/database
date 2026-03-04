@@ -6,19 +6,6 @@ pipeline {
     disableConcurrentBuilds()
   }
 
-  parameters {
-    choice(
-      name: 'FORCE_ENV',
-      choices: ['auto', 'build', 'rc', 'dev', 'staging', 'prod'],
-      description: 'Override pipeline mode for testing. auto = use branch/tag logic.'
-    )
-    string(
-      name: 'FORCE_IMAGE_TAG',
-      defaultValue: '',
-      description: 'Optional. If set, use this exact image tag instead of resolving from env/build number/tag.'
-    )
-  }
-
   environment {
     PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -64,13 +51,7 @@ pipeline {
           } else {
             env.TARGET_ENV = "build"
           }
-
-          def forced = (params.FORCE_ENV ?: 'auto').trim()
-          if (forced && forced != 'auto') {
-            env.TARGET_ENV = forced
-            echo "FORCE_ENV override applied -> TARGET_ENV=${env.TARGET_ENV}"
-          }
-
+          
           echo "BRANCH_NAME: ${branch}"
           echo "TAG_NAME: ${tagName ?: 'none'}"
           echo "TARGET_ENV: ${env.TARGET_ENV}"
