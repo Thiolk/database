@@ -31,6 +31,10 @@ pipeline {
     // Smoke test job manifest (runs inside cluster)
     DB_SMOKE_JOB = "k8s/database/base/smoke-job.yaml"
 
+    // Terraform artifacts
+    INFRA_JOB = "terraform-infra/main"
+    INFRA_OUTPUTS_GENERIC = "infra-outputs.json"
+
     // Keep these for consistent logging
     DOCKERHUB_USER = "thiolengkiat413"
     IMAGE_NAME     = "database"
@@ -159,6 +163,39 @@ pipeline {
       }
     }
 
+    stage('Fetch Infra Outputs (Terraform)') {
+      when { expression { return env.TARGET_ENV in ["dev","staging","prod"] } }
+      steps {
+        script {
+          def infraJob = env.INFRA_JOB
+          def envFile = "infra-outputs-${env.TARGET_ENV}.json"
+          def genericFile = "infra-outputs.json"
+
+          sh 'rm -f infra-outputs*.json || true'
+
+          copyArtifacts(
+            projectName: infraJob,
+            selector: lastSuccessful(),
+            filter: "${envFile},${genericFile}",
+            fingerprintArtifacts: true
+          )
+
+          sh """
+            set -eux
+            if [ -f "${envFile}" ]; then
+              cp "${envFile}" infra-outputs.json
+              echo "Using env-specific outputs: ${envFile}"
+            elif [ -f "${genericFile}" ]; then
+              echo "Using generic outputs: ${genericFile}"
+            else
+              echo "ERROR: No infra outputs found. Expected ${envFile} or ${genericFile}"
+              exit 1
+            fi
+          """
+        }
+      }
+    }
+
     stage('Deploy + Smoke Test (Dev/Staging/Prod)') {
       when { expression { return env.TARGET_ENV in ["dev","staging","prod"] } }
       steps {
@@ -166,6 +203,10 @@ pipeline {
           sh '''
             set -eux
             export KUBECONFIG="$KUBECONFIG_FILE"
+
+            chmod +x deploy/ci/load-infra-outputs.sh
+            eval "$(./deploy/ci/load-infra-outputs.sh)"
+            kubectl config use-context "$KUBE_CONTEXT"
 
             NS="${TARGET_ENV}"
             OVERLAY="${K8S_DIR}/${TARGET_ENV}"
@@ -179,6 +220,9 @@ pipeline {
             echo "Wait for deployment rollout"
             kubectl -n "$NS" rollout status deployment/postgres --timeout=180s
 
+            # Ensure clean job state (avoid stuck previous runs)
+            kubectl -n "$NS" delete job/postgres-smoke --ignore-not-found
+
             echo "Run DB smoke test job"
             kubectl -n "$NS" apply -f "$DB_SMOKE_JOB"
             kubectl -n "$NS" wait --for=condition=complete job/postgres-smoke --timeout=240s
@@ -188,11 +232,11 @@ pipeline {
             kubectl -n "$NS" delete job/postgres-smoke --ignore-not-found
 
             RAW_MARKER="jenkins-${JOB_NAME}-${BUILD_NUMBER}"
-            # replace anything not [A-Za-z0-9_.-] with '-'
             MARKER="$(echo "$RAW_MARKER" | sed 's/[^A-Za-z0-9_.-]/-/g')"
             echo "PVC marker: $MARKER"
 
             # --- 1) Write marker ---
+            kubectl -n "$NS" delete job/postgres-pvc-write --ignore-not-found
             sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-write-job.yaml | kubectl -n "$NS" apply -f -
             kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-write --timeout=240s
             kubectl -n "$NS" logs job/postgres-pvc-write
@@ -203,6 +247,7 @@ pipeline {
             kubectl -n "$NS" rollout status deployment/postgres --timeout=180s
 
             # --- 3) Read marker ---
+            kubectl -n "$NS" delete job/postgres-pvc-read --ignore-not-found
             sed "s|__MARKER__|${MARKER}|g" k8s/database/base/pvc-read-job.yaml  | kubectl -n "$NS" apply -f -
             kubectl -n "$NS" wait --for=condition=complete job/postgres-pvc-read --timeout=240s
             kubectl -n "$NS" logs job/postgres-pvc-read
@@ -232,6 +277,11 @@ pipeline {
           echo "==================================="
 
           mkdir -p artifacts || true
+
+          if [ -f infra-outputs.json ]; then
+            cp -f infra-outputs.json artifacts/infra-outputs.json || true
+          fi
+
           if [ -f /tmp/db-rendered.yaml ]; then
             cp -f /tmp/db-rendered.yaml artifacts/db-rendered.yaml || true
           fi
@@ -242,6 +292,12 @@ pipeline {
             sh '''
               set +e
               export KUBECONFIG="$KUBECONFIG_FILE"
+
+              # If infra outputs exist, try to use the context for best debug accuracy
+              if [ -f infra-outputs.json ] && [ -x deploy/ci/load-infra-outputs.sh ]; then
+                eval "$(./deploy/ci/load-infra-outputs.sh)" || true
+                kubectl config use-context "$KUBE_CONTEXT" 2>/dev/null || true
+              fi
 
               NS="${TARGET_ENV}"
 
