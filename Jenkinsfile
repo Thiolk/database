@@ -79,6 +79,19 @@ pipeline {
       }
     }
 
+    stage('Test (Integration - Local Postgres)') {
+      when { expression { env.TARGET_ENV in ["build", "rc"] } }
+      steps {
+        sh '''
+          set -eux
+          chmod +x tests/db-integration.sh
+          COMPOSE_FILE=deploy/docker/docker-compose.yml \
+          ENV_FILE=deploy/docker/.env \
+          ./tests/db-integration.sh
+        '''
+      }
+    }
+
     stage('Validate Kustomize (compile check)') {
       steps {
         sh '''
