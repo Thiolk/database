@@ -97,25 +97,37 @@ pipeline {
       }
     }
 
-    stage('Validate Kustomize (compile check)') {
+    stage('Infrastructure Validation (Kustomize + Dry Run)') {
       steps {
-        sh '''
-          set -eux
+        withCredentials([file(credentialsId: 'kubeconfig-minikube', variable: 'KUBECONFIG_FILE')]) {
+          sh '''
+            set -eux
+            export KUBECONFIG="$KUBECONFIG_FILE"
 
-          if [ "${TARGET_ENV}" = "dev" ] || [ "${TARGET_ENV}" = "staging" ] || [ "${TARGET_ENV}" = "prod" ]; then
-            OVERLAY="${K8S_DIR}/${TARGET_ENV}"
-          elif [ "${TARGET_ENV}" = "rc" ]; then
-            OVERLAY="${K8S_DIR}/staging"
-          else
-            OVERLAY="${K8S_DIR}/dev"
-          fi
+            mkdir -p artifacts
 
-          echo "Validating overlay: ${OVERLAY}"
-          kubectl kustomize "${OVERLAY}" >/tmp/db-rendered.yaml
-          test -s /tmp/db-rendered.yaml
-          echo "Rendered manifests size:"
-          wc -l /tmp/db-rendered.yaml
-        '''
+            validate_overlay() {
+              OVERLAY="$1"
+              NAME="$2"
+
+              echo "Validating overlay: $NAME ($OVERLAY)"
+
+              echo "--- kubectl kustomize: $OVERLAY ---"
+              kubectl kustomize "$OVERLAY" | tee "artifacts/kustomize-${NAME}.yaml" >/dev/null
+
+              echo "--- kubectl dry-run apply: $OVERLAY ---"
+              kubectl apply --dry-run=client -f "artifacts/kustomize-${NAME}.yaml" | tee "artifacts/dryrun-${NAME}.log"
+            }
+
+            if [ "${TARGET_ENV}" = "build" ] || [ "${TARGET_ENV}" = "rc" ]; then
+              validate_overlay "${K8S_DIR}/dev" "dev"
+              validate_overlay "${K8S_DIR}/staging" "staging"
+              validate_overlay "${K8S_DIR}/prod" "prod"
+            else
+              validate_overlay "${K8S_DIR}/${TARGET_ENV}" "${TARGET_ENV}"
+            fi
+          '''
+        }
       }
     }
 
