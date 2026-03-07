@@ -25,6 +25,9 @@ pipeline {
     // Keep these for consistent logging
     DOCKERHUB_USER = "thiolengkiat413"
     IMAGE_NAME     = "database"
+
+    ENV_EXAMPLE  = "deploy/docker/.env.example"
+    ENV_FILE     = "deploy/docker/.env"
   }
 
   stages {
@@ -84,6 +87,8 @@ pipeline {
       steps {
         sh '''
           set -eux
+          test -f "${ENV_EXAMPLE}"
+          [ -f "${ENV_FILE}" ] || cp "${ENV_EXAMPLE}" "${ENV_FILE}"
           chmod +x tests/db-integration.sh
           COMPOSE_FILE=deploy/docker/docker-compose.yml \
           ENV_FILE=deploy/docker/.env \
@@ -99,8 +104,9 @@ pipeline {
 
           if [ "${TARGET_ENV}" = "dev" ] || [ "${TARGET_ENV}" = "staging" ] || [ "${TARGET_ENV}" = "prod" ]; then
             OVERLAY="${K8S_DIR}/${TARGET_ENV}"
+          elif [ "${TARGET_ENV}" = "rc" ]; then
+            OVERLAY="${K8S_DIR}/staging"
           else
-            # For build/rc, validate dev overlay (or change to staging if you prefer stricter)
             OVERLAY="${K8S_DIR}/dev"
           fi
 
@@ -190,7 +196,7 @@ pipeline {
       }
     }
 
-    stage('Deploy + Smoke Test (Dev/Staging/Prod)') {
+    stage('Deploy + DB Validation (Dev/Staging/Prod)') {
       when { expression { return env.TARGET_ENV in ["dev","staging","prod"] } }
       steps {
         withCredentials([file(credentialsId: 'kubeconfig-minikube', variable: 'KUBECONFIG_FILE')]) {
