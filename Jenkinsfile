@@ -25,6 +25,9 @@ pipeline {
     // Keep these for consistent logging
     DOCKERHUB_USER = "thiolengkiat413"
     IMAGE_NAME     = "database"
+
+    ENV_EXAMPLE  = "deploy/docker/.env.example"
+    ENV_FILE     = "deploy/docker/.env"
   }
 
   stages {
@@ -79,24 +82,52 @@ pipeline {
       }
     }
 
-    stage('Validate Kustomize (compile check)') {
+    stage('Test (Integration - Local Postgres)') {
+      when { expression { env.TARGET_ENV in ["build", "rc"] } }
       steps {
         sh '''
           set -eux
-
-          if [ "${TARGET_ENV}" = "dev" ] || [ "${TARGET_ENV}" = "staging" ] || [ "${TARGET_ENV}" = "prod" ]; then
-            OVERLAY="${K8S_DIR}/${TARGET_ENV}"
-          else
-            # For build/rc, validate dev overlay (or change to staging if you prefer stricter)
-            OVERLAY="${K8S_DIR}/dev"
-          fi
-
-          echo "Validating overlay: ${OVERLAY}"
-          kubectl kustomize "${OVERLAY}" >/tmp/db-rendered.yaml
-          test -s /tmp/db-rendered.yaml
-          echo "Rendered manifests size:"
-          wc -l /tmp/db-rendered.yaml
+          test -f "${ENV_EXAMPLE}"
+          [ -f "${ENV_FILE}" ] || cp "${ENV_EXAMPLE}" "${ENV_FILE}"
+          chmod +x tests/db-integration.sh
+          COMPOSE_FILE=deploy/docker/docker-compose.yml \
+          ENV_FILE=deploy/docker/.env \
+          ./tests/db-integration.sh
         '''
+      }
+    }
+
+    stage('Infrastructure Validation (Kustomize + Dry Run)') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig-minikube', variable: 'KUBECONFIG_FILE')]) {
+          sh '''
+            set -eux
+            export KUBECONFIG="$KUBECONFIG_FILE"
+
+            mkdir -p artifacts
+
+            validate_overlay() {
+              OVERLAY="$1"
+              NAME="$2"
+
+              echo "Validating overlay: $NAME ($OVERLAY)"
+
+              echo "--- kubectl kustomize: $OVERLAY ---"
+              kubectl kustomize "$OVERLAY" | tee "artifacts/kustomize-${NAME}.yaml" >/dev/null
+
+              echo "--- kubectl dry-run apply: $OVERLAY ---"
+              kubectl apply --dry-run=client -f "artifacts/kustomize-${NAME}.yaml" | tee "artifacts/dryrun-${NAME}.log"
+            }
+
+            if [ "${TARGET_ENV}" = "build" ] || [ "${TARGET_ENV}" = "rc" ]; then
+              validate_overlay "${K8S_DIR}/dev" "dev"
+              validate_overlay "${K8S_DIR}/staging" "staging"
+              validate_overlay "${K8S_DIR}/prod" "prod"
+            else
+              validate_overlay "${K8S_DIR}/${TARGET_ENV}" "${TARGET_ENV}"
+            fi
+          '''
+        }
       }
     }
 
@@ -177,7 +208,7 @@ pipeline {
       }
     }
 
-    stage('Deploy + Smoke Test (Dev/Staging/Prod)') {
+    stage('Deploy + DB Validation (Dev/Staging/Prod)') {
       when { expression { return env.TARGET_ENV in ["dev","staging","prod"] } }
       steps {
         withCredentials([file(credentialsId: 'kubeconfig-minikube', variable: 'KUBECONFIG_FILE')]) {

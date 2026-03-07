@@ -1,266 +1,327 @@
 # Database (PostgreSQL)
 
-PostgreSQL database service for the Kubernetes-based e-commerce
-microservices system.
+PostgreSQL database service for the Kubernetes-based e-commerce microservices platform.
 
 This repository provides:
 
--   PostgreSQL configuration
--   Schema + seed initialization
--   Kubernetes manifests (dev / staging / prod)
--   Jenkins multibranch CI/CD integration
--   Persistent storage validation (PVC proof)
--   Security scanning via Docker Scout
--   Terraform-based infrastructure integration
+- PostgreSQL configuration and initialization
+- Schema + seed setup
+- Kubernetes manifests for **dev / staging / prod**
+- Jenkins multibranch CI/CD pipeline
+- Infrastructure validation integrated into CI/CD
+- Schema smoke testing
+- Persistent storage (PVC) verification
+- Docker-based local development environment
+- Terraform-integrated infrastructure outputs
+- Security scanning via Docker Scout
 
-------------------------------------------------------------------------
+---
 
 # Architecture Context
 
-This database service is part of a Kubernetes‑deployed microservices
-architecture:
+The database service is part of a Kubernetes-deployed microservices architecture:
 
--   **product-service** --- Product API (stateless, RollingUpdate)
--   **order-service** --- Order API (stateless, RollingUpdate)
--   **ecommerce-frontend** --- React frontend served by Nginx
--   **database** --- PostgreSQL (stateful, this repository)
+- **product-service** — Product API (stateless)
+- **order-service** — Order API (stateless)
+- **ecommerce-frontend** — React frontend served by Nginx
+- **database** — PostgreSQL (stateful, this repository)
 
-All services run inside **environment‑isolated Kubernetes namespaces**:
+All services run in **environment-isolated Kubernetes namespaces**:
 
--   dev
--   staging
--   prod
+- dev
+- staging
+- prod
 
-Infrastructure for the cluster, ingress controller, and supporting
-resources is provisioned using **Terraform**.
+Infrastructure provisioning (cluster setup, ingress controller, environment configuration) is managed using **Terraform**.
 
-Application deployment and validation is handled by **Jenkins
-pipelines**.
+Application deployment, testing, and validation are executed through **Jenkins CI/CD pipelines**.
 
-------------------------------------------------------------------------
+---
 
 # Release
 
-Current release: 2.2.0
+Current release: **2.3.0**
 
 Versioning follows **Semantic Versioning (SemVer)**:
 
 MAJOR.MINOR.PATCH
 
--   MAJOR --- breaking schema changes
--   MINOR --- backward‑compatible schema additions
--   PATCH --- fixes, seed updates, non‑breaking improvements
+- **MAJOR** — breaking schema changes
+- **MINOR** — backward-compatible schema additions
+- **PATCH** — fixes, seed updates, or non-breaking improvements
 
-Production releases are triggered via **Git tags** (example: `v2.0.0`).
+Production releases are triggered through **Git tags** (example: `v2.0.0`).
 
-------------------------------------------------------------------------
+---
 
-# Kubernetes Architecture
+# Repository Structure
 
-## Folder Structure
+```
+k8s/
+  database/
+    base/
+      deployment.yaml
+      service.yaml
+      pvc.yaml
+      configmap.yaml
+      secret.yaml
+      smoke-job.yaml
+      pvc-write-job.yaml
+      pvc-read-job.yaml
+      kustomization.yaml
 
-k8s/database/ base/ deployment.yaml service.yaml pvc.yaml configmap.yaml
-secret.yaml smoke-job.yaml pvc-write-job.yaml pvc-read-job.yaml
-kustomization.yaml overlays/ dev/ staging/ prod/
+    overlays/
+      dev/
+      staging/
+      prod/
 
-Kustomize overlays provide **environment‑specific configuration** while
-sharing a common base manifest set.
+deploy/
+  docker/
+    docker-compose.yml
+    .env.example
 
-------------------------------------------------------------------------
+schema/
+  init.sql
+
+tests/
+  db-integration.sh
+```
+
+Kustomize overlays provide **environment-specific configuration** while sharing a common base manifest set.
+
+---
 
 # Service Design
 
-## No Ingress
+## Internal Database Service
 
-PostgreSQL is not an HTTP service and therefore **does not use
-Kubernetes Ingress**.
+PostgreSQL is **not exposed via Kubernetes Ingress**.
 
-The database is accessible **only within the cluster network**.
+Instead, it is accessible only within the Kubernetes cluster using an internal service.
 
-## Internal Access
+Service type:
 
-Service type: **ClusterIP**
+```
+ClusterIP
+```
 
-Port: **5432**
+Port:
 
-Internal DNS access examples:
+```
+5432
+```
 
-postgres.dev.svc.cluster.local\
-postgres.staging.svc.cluster.local\
+Internal DNS examples:
+
+```
+postgres.dev.svc.cluster.local
+postgres.staging.svc.cluster.local
 postgres.prod.svc.cluster.local
+```
 
-This design ensures the database **remains private and inaccessible from
-the public network**.
+This ensures the database **remains private and inaccessible from the public network**.
 
-------------------------------------------------------------------------
+---
 
 # Deployment Strategy
 
-Database deployments use:
+The database is deployed as a **stateful Kubernetes workload**.
 
-replicas: 1\
+Configuration:
+
+```
+replicas: 1
 strategy: Recreate
+```
 
-Recreate strategy is used because PostgreSQL is **stateful** and must
-not run multiple instances against the same PVC.
+The **Recreate strategy** prevents multiple PostgreSQL instances from accessing the same persistent volume simultaneously.
 
-Health probes use **pg_isready** for both:
+Health checks use:
 
--   readinessProbe
--   livenessProbe
+```
+pg_isready
+```
 
-------------------------------------------------------------------------
+for:
+
+- readinessProbe
+- livenessProbe
+
+---
 
 # Persistent Storage
 
-Each environment provisions its own **PersistentVolumeClaim**.
+Each environment has its own **PersistentVolumeClaim (PVC)**.
 
-  Environment   Storage
-  ------------- ---------
-  dev           1Gi
-  staging       2Gi
-  prod          5Gi
+| Environment | Storage |
+|------------|--------|
+| dev | 1Gi |
+| staging | 2Gi |
+| prod | 5Gi |
 
 PVC configuration:
 
-name: postgres-data\
-accessMode: ReadWriteOnce\
+```
+name: postgres-data
+accessMode: ReadWriteOnce
 storageClass: standard
+```
 
-PVCs guarantee database data persists across:
+Persistent volumes guarantee database data survives:
 
--   pod restarts
--   rolling deployments
--   node rescheduling
+- pod restarts
+- node rescheduling
+- deployment rollouts
 
-------------------------------------------------------------------------
+---
 
 # CI/CD Pipeline (Jenkins)
 
-This repository uses a **Jenkins Multibranch Pipeline**.
+This repository uses a **Jenkins Multibranch Pipeline** integrated with the system’s Git branching strategy.
 
 ## Branch Strategy
 
-  Branch       Behavior
-  ------------ ----------------------------------
-  feature/\*   Validation only
-  develop      Deploy to dev
-  release/\*   Validation only
-  main         Deploy to staging
-  Git tag      Deploy to prod (manual approval)
+| Branch | Behavior |
+|------|------|
+| feature/* | Validation only |
+| develop | Deploy to **dev** |
+| release/* | Validation only |
+| main | Deploy to **staging** |
+| Git tag | Deploy to **prod** (manual approval) |
 
-------------------------------------------------------------------------
+---
 
-## Pipeline Stages
+# Infrastructure Testing & Validation
 
-1.  Kustomize compile validation
-2.  Apply Kubernetes overlay
-3.  Wait for PVC binding
-4.  Wait for deployment rollout
-5.  Schema smoke test (Kubernetes Job)
-6.  PVC persistence validation
-7.  Debug snapshot collection
+Infrastructure validation is automatically executed during CI/CD to ensure Kubernetes manifests and deployment configurations are correct before deployment.
 
-------------------------------------------------------------------------
+Validation includes:
+
+1. **Kustomize compilation**
+2. **Kubernetes client-side dry-run validation**
+3. **Database deployment verification**
+4. **Persistent storage validation**
+
+Example validation commands:
+
+```
+kubectl kustomize <overlay>
+kubectl apply --dry-run=client
+```
+
+This prevents invalid infrastructure configurations from reaching the Kubernetes cluster.
+
+---
 
 # Database Validation
 
-## 1) Schema Smoke Test
+## 1. Schema Smoke Test
 
-A Kubernetes **Job** validates database correctness.
+A Kubernetes **Job** validates database schema integrity after deployment.
 
-Validation checks:
+Checks include:
 
--   Tables exist
--   Required columns exist
--   Foreign key relationships exist
--   Seed data present
+- required tables exist
+- required columns exist
+- foreign key relationships are present
+- seed data is loaded
 
 If validation fails, the pipeline **fails immediately**.
 
-------------------------------------------------------------------------
+---
 
-## 2) PVC Persistence Proof
+## 2. PVC Persistence Verification
 
-Persistence is verified during CI using a three‑step test.
+CI/CD performs an automated persistence test.
 
-Step 1 --- Write Marker\
-A CI‑generated marker is written to the database.
+### Step 1 — Write Marker
 
-Step 2 --- Restart Database
+A CI-generated marker value is written to the database.
 
+### Step 2 — Restart Database
+
+```
 kubectl rollout restart deployment/postgres
+```
 
-Step 3 --- Read Marker
+### Step 3 — Read Marker
 
-A second job verifies the marker still exists.
+A verification job checks whether the marker still exists.
 
-If successful, this proves **data survives pod restarts**, confirming
-real persistent storage.
+Successful verification proves that data **survives pod restarts**, confirming persistent storage works correctly.
 
-------------------------------------------------------------------------
+---
 
 # Terraform Infrastructure Integration
 
-Infrastructure provisioning is managed in a **separate Terraform
-repository**.
+Infrastructure provisioning is handled in a **separate Terraform repository**.
 
 Terraform provisions:
 
--   Kubernetes cluster configuration
--   ingress-nginx controller
--   development infrastructure resources
--   environment workspace separation
--   infrastructure outputs for CI/CD pipelines
+- Kubernetes cluster configuration
+- ingress-nginx controller
+- namespace isolation for environments
+- cluster infrastructure outputs used by CI/CD
 
-Terraform outputs are exported to:
+Terraform pipelines perform infrastructure validation using:
 
-infra-outputs.json\
-infra-outputs-dev.json\
-infra-outputs-staging.json\
+```
+terraform fmt -check
+terraform validate
+terraform plan
+```
+
+Terraform outputs are exported as:
+
+```
+infra-outputs.json
+infra-outputs-dev.json
+infra-outputs-staging.json
 infra-outputs-prod.json
+```
 
 These outputs include:
 
--   Kubernetes context
--   ingress controller namespace
--   ingress service name
--   cluster access details
+- Kubernetes context
+- ingress controller namespace
+- ingress service name
+- cluster access configuration
 
-Jenkins pipelines retrieve these artifacts and load them using:
+Application pipelines retrieve these artifacts and load them using:
 
+```
 deploy/ci/load-infra-outputs.sh
+```
 
-This ensures service pipelines deploy against the **correct environment
-infrastructure** created by Terraform.
+This ensures services deploy against the **correct infrastructure environment** created by Terraform.
 
 Note:
 
-The database itself is deployed via Jenkins using Kubernetes manifests,
-while Terraform manages the **underlying platform infrastructure**.
+Terraform manages **platform infrastructure**, while the database itself is deployed via **Kubernetes manifests in this repository**.
 
-------------------------------------------------------------------------
+---
 
 # Local Development (Docker Compose)
 
-Docker Compose is retained for **local development only**.
+Docker Compose is provided for **local development and integration testing**.
 
 ## Start Database
 
+```
 cp deploy/docker/.env.example deploy/docker/.env
 
-docker compose -f deploy/docker/docker-compose.yml --env-file
-deploy/docker/.env up -d
+docker compose -f deploy/docker/docker-compose.yml   --env-file deploy/docker/.env   up -d
+```
 
 ## Reset Database
 
-docker compose -f deploy/docker/docker-compose.yml --env-file
-deploy/docker/.env down -v
+```
+docker compose -f deploy/docker/docker-compose.yml   --env-file deploy/docker/.env   down -v
 
-docker compose -f deploy/docker/docker-compose.yml --env-file
-deploy/docker/.env up -d
+docker compose -f deploy/docker/docker-compose.yml   --env-file deploy/docker/.env   up -d
+```
 
-------------------------------------------------------------------------
+---
 
 # Security Scanning
 
@@ -283,21 +344,3 @@ Official images are preferred for:
 -   stability
 -   maintenance reliability
 -   supply chain trust
-
-------------------------------------------------------------------------
-
-# Current Status
-
-The database service now includes:
-
--   Kubernetes stateful deployment
--   Environment‑isolated namespaces
--   Persistent volume claims per environment
--   Automated schema validation
--   Verified PVC persistence testing
--   Jenkins CI/CD automation
--   Terraform‑integrated infrastructure provisioning
-
-This repository represents a **production‑style Kubernetes database
-deployment with CI‑driven validation and persistent storage
-verification**.
