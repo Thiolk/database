@@ -23,8 +23,14 @@ if [[ -z "${POSTGRES_DB}" || -z "${POSTGRES_USER}" || -z "${POSTGRES_PASSWORD}" 
   exit 1
 fi
 
+echo "Reset DB container for clean test run"
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v || true
+
+echo "Start DB container"
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d db
+
 # Figure out container id for the DB service (assumes only one service is running)
-DB_CID="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q | head -n 1)"
+DB_CID="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q db)"
 if [[ -z "$DB_CID" ]]; then
   echo "ERROR: Could not find running DB container from compose."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
@@ -147,5 +153,8 @@ fi
 
 echo "All DB tests passed ✅"
 
-echo "Cleanup"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v
+cleanup() {
+  echo "Cleanup"
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down -v || true
+}
+trap cleanup EXIT
